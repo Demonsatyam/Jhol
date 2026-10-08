@@ -154,7 +154,7 @@ The backend streams NDJSON events (`entities`, `probe_start`, `probe_done`, `fol
 | `google` | Official website | `IMPERSONATION` / `OFFICIAL_DOMAIN_MATCH` | `"Amazon" official website` |
 | `google` | Domain footprint | `ZERO_FOOTPRINT` | `site:amazon-taskjobs-in.top` |
 | `google` | Complaints (follow-up hop) | `COMPLAINTS_FOUND` | `"amazon-taskjobs-in.top" scam OR fraud OR complaint` |
-| `google` | Regulator records | `REGULATOR_CLAIM_UNVERIFIED` / `REGULATOR_VERIFIED` | `"Vriddhi Alpha Capital Advisors" site:sebi.gov.in OR site:rbi.gov.in` |
+| `google` | Regulator records | `REGULATOR_CLAIM_UNVERIFIED` / `REGULATOR_VERIFIED` | `"Vriddhi Alpha Capital Advisors" site:sebi.gov.in OR site:rbi.org.in` |
 | `google_news` | Scam pattern in news | `PATTERN_IN_NEWS` | `stock tips telegram group scam` |
 | `google_play` | App lookup | `APP_RED_FLAGS` | `TaskEarn Pro` |
 | `google_maps` | Office check | `GHOST_OFFICE` / `ESTABLISHED_PLACE` | `Vriddhi Alpha Capital Advisors 1204, Dalal Street Commercial Tower, Fort` |

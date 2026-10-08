@@ -17,6 +17,7 @@ WEIGHTS = {
 BANDS = [(30, "low"), (60, "caution"), (100, "likely_scam")]
 STOCK_SITES = ("shutterstock", "istockphoto", "gettyimages", "freepik", "dreamstime", "123rf", "alamy",
                "depositphotos", "pexels", "unsplash", "pixabay", "adobe.com", "vecteezy")
+REGULATOR_SITES = ("sebi.gov.in", "rbi.org.in", "rbi.gov.in")
 # ponytail: tiny public-suffix list, swap for tldextract if odd TLDs show up
 MULTI_SUFFIX = ("co.in", "bank.in", "gov.in", "org.in", "net.in", "ac.in", "edu.in", "nic.in", "firm.in",
                 "gen.in", "ind.in", "res.in", "co.uk", "com.au")
@@ -80,7 +81,9 @@ def compute_signals(entities, evidence):
                         f"{len(complaints)} complaint/fraud reports mention {complaints[0][0]['facts'].get('target')}"))
 
     for e in _ok(evidence, "regulator"):
-        verified = [l for l in e["links"] if l.get("label") != "complaint" and mentions(l, e["facts"].get("target"))]
+        # Google sometimes ignores site: filters; only pages actually on the regulators' sites count
+        verified = [l for l in e["links"] if registrable(l.get("url")) in REGULATOR_SITES
+                    and l.get("label") != "complaint" and mentions(l, e["facts"].get("target"))]
         if verified:
             out.append(_sig("REGULATOR_VERIFIED", [e["id"]], f"{len(verified)} matching page(s) on SEBI/RBI"))
         elif entities.get("regulator_claims"):
@@ -100,7 +103,7 @@ def compute_signals(entities, evidence):
             out.append(_sig("ZERO_FOOTPRINT", [e["id"]], f"{e['facts']['domain']} has no pages indexed by Google"))
             break
 
-    news = _ok(evidence, "news_pattern")
+    news = sorted(_ok(evidence, "news_pattern"), key=lambda e: -len(e["links"]))
     if news and len(news[0]["links"]) >= 2:
         out.append(_sig("PATTERN_IN_NEWS", [news[0]["id"]],
                         f"{news[0]['facts'].get('articles', len(news[0]['links']))} news reports on '{entities.get('scam_pattern')}' scams"))
