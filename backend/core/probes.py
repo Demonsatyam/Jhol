@@ -28,10 +28,18 @@ def _tokens(s):
 
 # ---------- probe specs: {probe, engine, params, query, parse(data) -> (links, facts)} ----------
 
+def brand_in_domain(brand, domain):
+    """An 'official' domain must carry the brand's name; the top result for an obscure brand is often junk."""
+    name = re.sub(r"[^a-z0-9]", "", registrable(domain).rsplit(".", 1)[0] if "." in domain else domain.lower())
+    keys = {re.sub(r"[^a-z0-9]", "", brand.lower())} | {t for t in _tokens(brand) if len(t) >= 4}
+    return any(k and k in name for k in keys)
+
+
 def official_domain(brand):
     def parse(d):
         org = d.get("organic_results", [])
-        top = next((r for r in org if registrable(r.get("link")) not in NOT_OFFICIAL), None)
+        top = next((r for r in org if registrable(r.get("link")) not in NOT_OFFICIAL
+                    and brand_in_domain(brand, r.get("link", ""))), None)
         return _links(org, 3), {"brand": brand, "official_domain": registrable(top["link"]) if top else None}
     q = f'"{brand}" official website'
     return {"probe": "official_domain", "engine": "google", "query": q, "params": {"q": q}, "parse": parse}
@@ -51,7 +59,7 @@ def complaints(target):
 
 
 def regulator(name):
-    q = f'"{name}" site:sebi.gov.in OR site:rbi.gov.in'
+    q = f'"{name}" site:sebi.gov.in OR site:rbi.org.in'
     return {"probe": "regulator", "engine": "google", "query": q, "params": {"q": q},
             "parse": lambda d: (_links(d.get("organic_results", []), 5),
                                 {"target": name, "hits": len(d.get("organic_results", []))})}
@@ -185,6 +193,9 @@ def investigate(text, image=None, mime=None):
                 e = fut.result()
                 evidence.append(e)
                 yield {"type": "probe_done", "evidence": e}
+                if e["probe"] == "news_pattern" and brand and e["facts"].get("articles", 0) < 2:
+                    if ev := submit(news_pattern(pattern, "")):  # brand-specific query too narrow: widen once
+                        yield ev
                 if e["probe"] != "official_domain" or not domains:
                     continue
                 official = e["facts"].get("official_domain")
@@ -193,7 +204,10 @@ def investigate(text, image=None, mime=None):
                     reason = (f"{lookalikes[0]} is not {brand}'s official domain ({official}): checking impersonation"
                               if official else f"Couldn't confirm {brand}'s official site: checking {lookalikes[0]}")
                     yield {"type": "followup", "reason": reason}
-                    for s in (domain_footprint(lookalikes[0]), complaints(lookalikes[0])):
+                    hops = [domain_footprint(lookalikes[0]), complaints(lookalikes[0])]
+                    if not official:  # unknown brand: complaints about the brand itself matter more than its link
+                        hops.append(complaints(company or brand))
+                    for s in hops:
                         if ev := submit({**s, "followup": True}):
                             yield ev
     finally:

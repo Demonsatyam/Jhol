@@ -28,7 +28,7 @@ class ScoreTests(SimpleTestCase):
     def test_official_and_regulator_verified_is_low(self):
         ents = {"brand": "SBI", "domains": ["onlinesbi.sbi.bank.in"], "regulator_claims": ["RBI regulated"]}
         evidence = [ev("E1", "official_domain", {"official_domain": "sbi.bank.in"}),
-                    ev("E2", "regulator", {"target": "SBI", "hits": 1}, [{"title": "SBI", "label": "official"}])]
+                    ev("E2", "regulator", {"target": "SBI", "hits": 1}, [{"title": "SBI", "url": "https://rbi.org.in/x", "label": "official"}])]
         sigs = compute_signals(ents, evidence)
         self.assertEqual({s["code"] for s in sigs}, {"OFFICIAL_DOMAIN_MATCH", "REGULATOR_VERIFIED"})
         self.assertEqual(score(sigs), (0, "low"))
@@ -45,6 +45,10 @@ class ScoreTests(SimpleTestCase):
             {"title": "SEBI order against Acme", "label": "complaint"}, {"title": "Unrelated SEBI circular", "label": "neutral"}])])
         self.assertEqual([s["code"] for s in sigs], ["REGULATOR_CLAIM_UNVERIFIED"])
 
+    def test_regulator_pages_must_be_on_regulator_sites(self):
+        off_site = {"title": "Kredito24 Loan", "url": "https://www.crunchbase.com/kredito24", "label": "official"}
+        self.assertEqual(compute_signals({}, [ev("E1", "regulator", {"target": "Kredito24"}, [off_site])]), [])
+
     def test_complaints_must_mention_target(self):
         generic = {"title": "Amazon job scams", "url": "https://amazon.in/x", "snippet": "beware", "label": "complaint"}
         self.assertEqual(compute_signals({}, [ev("E1", "complaints", {"target": "evil.xyz"}, [generic, generic])]), [])
@@ -53,6 +57,20 @@ class ScoreTests(SimpleTestCase):
         self.assertEqual(score([{"weight": 30}]), (30, "low"))
         self.assertEqual(score([{"weight": 31}]), (31, "caution"))
         self.assertEqual(score([{"weight": 61}, {"weight": 99}]), (100, "likely_scam"))
+
+
+class ProbeTests(SimpleTestCase):
+    def test_official_domain_must_carry_brand_name(self):
+        from .probes import official_domain
+        junk = {"organic_results": [{"link": "https://sourceforge.net/x", "title": "Kredito24"},
+                                    {"link": "https://fibe.india/jobs", "title": "Kredito24 jobs"}]}
+        self.assertIsNone(official_domain("Kredito24")["parse"](junk)[1]["official_domain"])
+        real = {"organic_results": [{"link": "https://www.facebook.com/sbi"}, {"link": "https://sbi.bank.in/web"}]}
+        self.assertEqual(official_domain("SBI")["parse"](real)[1]["official_domain"], "sbi.bank.in")
+
+    def test_widest_news_query_counts(self):
+        sigs = compute_signals({"scam_pattern": "loan"}, [ev("E1", "news_pattern", {}, []), ev("E2", "news_pattern", {}, [{}, {}, {}])])
+        self.assertEqual([(s["code"], s["evidence_ids"]) for s in sigs], [("PATTERN_IN_NEWS", ["E2"])])
 
 
 class HelperTests(SimpleTestCase):
