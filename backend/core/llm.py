@@ -134,8 +134,10 @@ def classify(items):
 # ---------- narrate ----------
 
 def guard_citations(text, valid_ids):
-    """Strip any [E#] the model invented."""
-    return re.sub(r"\[(E\d+)\]", lambda m: m.group(0) if m.group(1) in valid_ids else "", text or "").replace("  ", " ")
+    """Strip any [E#] the model invented; split lists like [E3, E7] into [E3][E7]."""
+    def keep(m):
+        return "".join(f"[{i}]" for i in re.findall(r"E\d+", m.group(0)) if i in valid_ids)
+    return re.sub(r"\[E\d+(?:\s*,\s*E\d+)*\]", keep, text or "").replace("  ", " ")
 
 
 def _fallback_narrative(signals, score, band):

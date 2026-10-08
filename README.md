@@ -34,6 +34,14 @@ Built for the SerpApi India Hackathon 2026.
 | SBI KYC scam (screenshot) | **75** | Likely scam | Impersonation +30, Zero footprint +15, Pattern in news +15, App red flags +15 |
 | Real SBI debit SMS (control) | **0** | Low risk | Official domain match −20, Pattern in news +15 |
 
+## Walkthrough video
+
+▶️ **[docs/jhol-walkthrough.mp4](docs/jhol-walkthrough.mp4)** (81 s, 1440×900). It tours the landing page, then checks a
+real unsolicited loan SMS live: *"instant funding up to Rs.40,000… Apply now: http://go3.in/… Kredito24"*.
+All 7 SerpApi searches stream in with **live** badges. Kredito24's official site can't be confirmed, so Jhol makes a
+follow-up hop on the short link and on the lender itself. It lands on **40 / Be careful**: 3 complaint reports name
+Kredito24 (+25), and there's a wide news pattern of instant-loan-app scams (+15).
+
 ## Screenshots
 
 ### The portal

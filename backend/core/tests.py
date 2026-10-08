@@ -76,6 +76,7 @@ class ProbeTests(SimpleTestCase):
 class HelperTests(SimpleTestCase):
     def test_citation_guard_strips_fake_ids(self):
         self.assertEqual(guard_citations("Bad site [E1][E9]. Ok [E2].", {"E1", "E2"}), "Bad site [E1]. Ok [E2].")
+        self.assertEqual(guard_citations("Both [E3, E7, E9].", {"E3", "E7"}), "Both [E3][E7].")
 
     def test_domains(self):
         self.assertEqual(registrable("https://www.onlinesbi.sbi.bank.in/x"), "sbi.bank.in")
