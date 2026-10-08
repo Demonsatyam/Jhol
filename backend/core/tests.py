@@ -8,7 +8,7 @@ def ev(id, probe, facts=None, links=None):
     return {"id": id, "probe": probe, "engine": "google", "query": "", "facts": facts or {}, "links": links or []}
 
 
-COMPLAINT = {"title": "x", "url": "u", "snippet": "", "label": "complaint"}
+COMPLAINT = {"title": "x", "url": "u", "snippet": "amazon-task-jobs.xyz took my money", "label": "complaint"}
 
 
 class ScoreTests(SimpleTestCase):
@@ -28,7 +28,7 @@ class ScoreTests(SimpleTestCase):
     def test_official_and_regulator_verified_is_low(self):
         ents = {"brand": "SBI", "domains": ["onlinesbi.sbi.bank.in"], "regulator_claims": ["RBI regulated"]}
         evidence = [ev("E1", "official_domain", {"official_domain": "sbi.bank.in"}),
-                    ev("E2", "regulator", {"hits": 1}, [{"title": "SBI", "label": "official"}])]
+                    ev("E2", "regulator", {"target": "SBI", "hits": 1}, [{"title": "SBI", "label": "official"}])]
         sigs = compute_signals(ents, evidence)
         self.assertEqual({s["code"] for s in sigs}, {"OFFICIAL_DOMAIN_MATCH", "REGULATOR_VERIFIED"})
         self.assertEqual(score(sigs), (0, "low"))
@@ -41,8 +41,13 @@ class ScoreTests(SimpleTestCase):
 
     def test_regulator_enforcement_page_is_not_verification(self):
         ents = {"regulator_claims": ["SEBI registered"]}
-        sigs = compute_signals(ents, [ev("E1", "regulator", {}, [{"title": "SEBI order", "label": "complaint"}])])
+        sigs = compute_signals(ents, [ev("E1", "regulator", {"target": "Acme"}, [
+            {"title": "SEBI order against Acme", "label": "complaint"}, {"title": "Unrelated SEBI circular", "label": "neutral"}])])
         self.assertEqual([s["code"] for s in sigs], ["REGULATOR_CLAIM_UNVERIFIED"])
+
+    def test_complaints_must_mention_target(self):
+        generic = {"title": "Amazon job scams", "url": "https://amazon.in/x", "snippet": "beware", "label": "complaint"}
+        self.assertEqual(compute_signals({}, [ev("E1", "complaints", {"target": "evil.xyz"}, [generic, generic])]), [])
 
     def test_bands(self):
         self.assertEqual(score([{"weight": 30}]), (30, "low"))

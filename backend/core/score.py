@@ -39,6 +39,16 @@ def parse_installs(s):
     return int(digits) if digits else 0
 
 
+def mentions(link, target):
+    """Deterministic relevance check: Google drops unknown quoted terms, so make sure the result names the target."""
+    t = (target or "").lower()
+    hay = f"{link.get('title', '')} {link.get('snippet', '')} {link.get('url', '')}".lower()
+    digits = re.sub(r"\D", "", t)
+    if len(digits) >= 10:
+        return digits[-10:] in re.sub(r"\D", "", hay)
+    return bool(t) and (t in hay or t.split(".")[0] in hay.replace(" ", "-"))
+
+
 def _ok(evidence, probe):
     return [e for e in evidence if e["probe"] == probe and not e["facts"].get("inconclusive")]
 
@@ -62,14 +72,15 @@ def compute_signals(entities, evidence):
         elif not fakes:
             out.append(_sig("OFFICIAL_DOMAIN_MATCH", [off["id"]], f"All links point to {official}"))
 
-    complaints = [(e, l) for e in _ok(evidence, "complaints") for l in e["links"] if l.get("label") == "complaint"]
+    complaints = [(e, l) for e in _ok(evidence, "complaints") for l in e["links"]
+                  if l.get("label") == "complaint" and mentions(l, e["facts"].get("target"))]
     if len(complaints) >= 2:
         ids = sorted({e["id"] for e, _ in complaints})
         out.append(_sig("COMPLAINTS_FOUND", ids,
                         f"{len(complaints)} complaint/fraud reports mention {complaints[0][0]['facts'].get('target')}"))
 
     for e in _ok(evidence, "regulator"):
-        verified = [l for l in e["links"] if l.get("label") != "complaint"]
+        verified = [l for l in e["links"] if l.get("label") != "complaint" and mentions(l, e["facts"].get("target"))]
         if verified:
             out.append(_sig("REGULATOR_VERIFIED", [e["id"]], f"{len(verified)} matching page(s) on SEBI/RBI"))
         elif entities.get("regulator_claims"):
@@ -92,7 +103,7 @@ def compute_signals(entities, evidence):
     news = _ok(evidence, "news_pattern")
     if news and len(news[0]["links"]) >= 2:
         out.append(_sig("PATTERN_IN_NEWS", [news[0]["id"]],
-                        f"{len(news[0]['links'])} news reports on '{entities.get('scam_pattern')}' scams"))
+                        f"{news[0]['facts'].get('articles', len(news[0]['links']))} news reports on '{entities.get('scam_pattern')}' scams"))
 
     for e in _ok(evidence, "play_app"):
         f = e["facts"]

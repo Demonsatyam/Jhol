@@ -1,9 +1,11 @@
 """LLM jobs: extract entities, classify snippets, narrate. Gemini -> Groq -> heuristic. The LLM never scores."""
+import hashlib
 import json
 import os
 import re
 
 from .score import registrable
+from .serp import FIXTURES
 
 ENTITY_KEYS = {"brand": "", "domains": [], "urls": [], "phones": [], "upi_ids": [], "app_names": [],
                "regulator_claims": [], "company": "", "address": "", "city": "", "scam_pattern": "",
@@ -16,9 +18,12 @@ def _gemini(prompt, image=None, mime=None):
     from google.genai import types
     client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
     parts = [prompt] + ([types.Part.from_bytes(data=image, mime_type=mime or "image/png")] if image else [])
-    r = client.models.generate_content(
-        model=os.environ.get("GEMINI_MODEL", "gemini-flash-latest"), contents=parts,
-        config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0))
+    cfg = types.GenerateContentConfig(response_mime_type="application/json", temperature=0)
+    try:
+        r = client.models.generate_content(model=os.environ.get("GEMINI_MODEL", "gemini-flash-latest"),
+                                           contents=parts, config=cfg)
+    except Exception:  # noqa: BLE001 - 503 "high demand" is common; lite model is usually free
+        r = client.models.generate_content(model="gemini-flash-lite-latest", contents=parts, config=cfg)
     return json.loads(r.text)
 
 
@@ -31,7 +36,19 @@ def _groq(prompt):
 
 
 def ask_json(prompt, image=None, mime=None):
-    """Returns (dict, provider) or (None, 'fallback')."""
+    """Returns (dict, provider) or (None, 'fallback'). Answers are cached as fixtures by prompt hash so the same
+    message always yields the same entities/queries (saves SerpApi credits, makes REPLAY deterministic)."""
+    f = FIXTURES / "llm" / (hashlib.sha256(prompt.encode() + (image or b"")).hexdigest() + ".json")
+    if f.exists():
+        return json.loads(f.read_text()), "cache"
+    data, provider = _ask_live(prompt, image, mime)
+    if data is not None:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(data, ensure_ascii=False))
+    return data, provider
+
+
+def _ask_live(prompt, image, mime):
     if os.environ.get("GEMINI_API_KEY"):
         try:
             return _gemini(prompt, image, mime), "gemini"
@@ -53,7 +70,7 @@ def regex_entities(text):
     no_mail = re.sub(r"[\w.\-]+@[\w.\-]+", " ", t)  # don't read emails/UPI ids as domains
     bare = re.findall(r"\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:/[^\s]*)?", no_mail.lower())
     domains = list(dict.fromkeys(registrable(u) for u in urls + bare))
-    phones = [re.sub(r"[\s-]", "", p) for p in re.findall(r"(?:\+91[\s-]?)?[6-9]\d{9}\b", t)]
+    phones = [re.sub(r"[\s-]", "", p) for p in re.findall(r"(?<![\d+])(?:\+91[\s-]?)?[6-9]\d{4}\s?\d{5}\b", t)]
     upi = re.findall(r"\b[\w.\-]+@[a-z]+\b(?!\.)", t.lower())
     return {"urls": urls, "domains": domains, "phones": phones, "upi_ids": upi}
 
@@ -61,18 +78,25 @@ def regex_entities(text):
 def extract(text, image=None, mime=None):
     prompt = (
         "You extract entities from a message an Indian user received (WhatsApp/SMS/email/screenshot). "
-        "Return ONLY JSON with keys: brand (well-known brand the message claims to be from, e.g. 'Amazon', 'SBI', "
-        "or ''), domains (list of website domains in the message), urls, phones, upi_ids, app_names (apps it asks "
+        "Return ONLY JSON with keys: brand (a famous real brand, bank or government body the message claims to "
+        "represent, e.g. 'Amazon', 'SBI', 'Income Tax Department'; '' if the sender is just its own lesser-known "
+        "company, which goes in company), domains (list of website domains in the message), urls, phones, upi_ids, app_names (apps it asks "
         "to install), regulator_claims (e.g. 'SEBI registered'), company (legal/company name stated), address, city, "
         "scam_pattern (short neutral phrase like 'task-based part-time job', 'stock tips telegram group', "
         "'KYC update'; '' if it reads like a routine transactional message), image_urls, language, "
         "message_text (the full message text; transcribe it if it is in the image).\n\nMESSAGE:\n" + (text or "(see image)"))
     data, provider = ask_json(prompt, image, mime)
     ents = {k: (data or {}).get(k) or type(v)() for k, v in ENTITY_KEYS.items()}
+    for k, v in ENTITY_KEYS.items():  # LLMs sometimes return "x" for ["x"] or vice versa
+        if isinstance(v, list) and isinstance(ents[k], str):
+            ents[k] = [ents[k]]
+        elif isinstance(v, str) and not isinstance(ents[k], str):
+            ents[k] = ", ".join(map(str, ents[k])) if isinstance(ents[k], list) else str(ents[k])
     ents["message_text"] = ents["message_text"] or text or ""
     rx = regex_entities(ents["message_text"] + "\n" + (text or ""))
     for k in ("urls", "domains", "phones", "upi_ids"):  # always merge regex; LLMs miss URLs
-        vals = [registrable(d) for d in ents[k]] if k == "domains" else ents[k]
+        vals = ([registrable(d) for d in ents[k]] if k == "domains" else
+                [re.sub(r"[\s-]", "", p) for p in ents[k]] if k == "phones" else ents[k])
         ents[k] = list(dict.fromkeys(v for v in vals + rx[k] if v))
     if not data:  # crude fallback for the rest
         low = ents["message_text"].lower()
