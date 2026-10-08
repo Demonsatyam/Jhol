@@ -1,7 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, MotionConfig, animate, motion, useMotionValue } from "motion/react";
+import { EASE, Mark } from "@/components/Brand";
+import Isometric from "@/components/Isometric";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -15,15 +18,15 @@ type Item = { kind: "probe"; id: string } | { kind: "followup"; reason: string }
 type Signal = { code: string; weight: number; evidence_ids: string[]; detail: string };
 
 const EXAMPLES = [
-  { label: "Task-scam job offer", file: "task_scam.txt" },
-  { label: "“SEBI registered” stock tip", file: "sebi_tip.txt" },
-  { label: "Real bank SMS (control)", file: "bank_sms.txt" },
-  { label: "KYC scam screenshot", file: "kyc_screenshot.png" },
+  { label: "Task-scam job", file: "task_scam.txt" },
+  { label: "“SEBI” stock tip", file: "sebi_tip.txt" },
+  { label: "Real bank SMS", file: "bank_sms.txt" },
+  { label: "KYC screenshot", file: "kyc_screenshot.png" },
 ];
 const PROBE_NAMES: Record<string, string> = {
   official_domain: "Find the brand's official website",
   domain_footprint: "Check the link's footprint on Google",
-  complaints: "Search for complaints & fraud reports",
+  complaints: "Search complaints & fraud reports",
   regulator: "Look for SEBI / RBI records",
   news_pattern: "Scan news for this scam pattern",
   lens: "Reverse-search the image",
@@ -31,17 +34,18 @@ const PROBE_NAMES: Record<string, string> = {
   maps_office: "Verify the office on Google Maps",
 };
 const BAND = {
-  low: { label: "Low risk", color: "#16a34a" },
-  caution: { label: "Be careful", color: "#d97706" },
-  likely_scam: { label: "Likely scam", color: "#dc2626" },
+  low: { label: "Low risk", color: "#16a34a", note: "Few risk indicators found. Still never share an OTP or PIN." },
+  caution: { label: "Be careful", color: "#d97706", note: "Some risk indicators found. Verify through official channels first." },
+  likely_scam: { label: "Likely scam", color: "#ff4f12", note: "Multiple risk indicators found. Don't click, pay or share OTPs." },
 } as const;
 type Band = keyof typeof BAND;
 
 const host = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return ""; } };
 
-export default function Home() {
+export default function Check() {
   const [text, setText] = useState("");
   const [image, setImage] = useState<File | null>(null);
+  const [sample, setSample] = useState("");
   const [running, setRunning] = useState(false);
   const [items, setItems] = useState<Item[]>([]);
   const [cards, setCards] = useState<Record<string, Card>>({});
@@ -52,6 +56,8 @@ export default function Home() {
   const [error, setError] = useState("");
   const [flash, setFlash] = useState("");
   const [copied, setCopied] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const [drag, setDrag] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -60,7 +66,18 @@ export default function Home() {
     if (ex && EXAMPLES.some(x => x.file === ex)) loadExample(ex);
   }, []);
 
+  const preview = useMemo(() => (image ? URL.createObjectURL(image) : ""), [image]);
+  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
+
+  useEffect(() => {
+    if (!running) return;
+    const t0 = Date.now();
+    const t = setInterval(() => setElapsed((Date.now() - t0) / 1000), 100);
+    return () => clearInterval(t);
+  }, [running]);
+
   async function loadExample(file: string) {
+    setSample(file);
     const res = await fetch(`/examples/${file}`);
     if (file.endsWith(".png")) {
       setText("");
@@ -95,7 +112,8 @@ export default function Home() {
   }
 
   async function check() {
-    setRunning(true); setItems([]); setCards({}); setSignals([]); setResult(null); setNarrative(null); setError("");
+    setRunning(true); setItems([]); setCards({}); setSignals([]); setResult(null); setNarrative(null); setError(""); setElapsed(0);
+    if (window.innerWidth < 1024) document.getElementById("timeline")?.scrollIntoView({ behavior: "smooth" });
     const form = new FormData();
     form.append("text", text);
     if (image) form.append("image", image);
@@ -125,149 +143,284 @@ export default function Home() {
     setFlash(""); requestAnimationFrame(() => setFlash(id));
   }
 
+  function pickFile(f: File | null | undefined) {
+    if (f) { setImage(f); setSample(""); }
+  }
+
   const Cite = ({ ids }: { ids: string[] }) => <>{ids.map(id => (
     <button key={id} onClick={() => jump(id)}
-      className="ml-1 rounded bg-zinc-200 px-1.5 py-0.5 font-mono text-xs hover:bg-amber-200 dark:bg-zinc-800 dark:hover:bg-amber-900">{id}</button>
+      className="mx-0.5 rounded bg-ink/[0.06] px-1.5 py-0.5 align-[1px] font-mono text-[10.5px] font-semibold text-ink transition hover:bg-ember hover:text-white">{id}</button>
   ))}</>;
 
+  const probes = Object.values(cards);
+  const done = probes.filter(c => c.ev).length;
+  const started = running || items.length > 0;
+
   return (
-    <div className="mx-auto max-w-[1400px] px-4 py-6">
-      <header className="mb-6 flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-3xl font-black tracking-tight"><Link href="/">Jhol<span className="text-amber-500">?</span></Link></h1>
-          <p className="text-sm text-zinc-500">Is it a scam? Find out in 20 seconds, with sources.</p>
-        </div>
-        <div className="rounded-full border border-zinc-300 px-3 py-1 font-mono text-xs dark:border-zinc-700">
-          SerpApi credits: {credits === undefined ? "…" : credits === null ? "replay mode" : credits}
-        </div>
-      </header>
-
-      <main className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1.1fr)]">
-        {/* 1. Input */}
-        <section className="space-y-3">
-          <textarea value={text} onChange={e => setText(e.target.value)} rows={11}
-            placeholder="Paste the message you received"
-            className="w-full rounded-lg border border-zinc-300 bg-white p-3 text-sm outline-none focus:border-amber-500 dark:border-zinc-700 dark:bg-zinc-900" />
-          <div onClick={() => fileRef.current?.click()} onDragOver={e => e.preventDefault()}
-            onDrop={e => { e.preventDefault(); setImage(e.dataTransfer.files[0] ?? null); }}
-            className="cursor-pointer rounded-lg border-2 border-dashed border-zinc-300 p-4 text-center text-sm text-zinc-500 hover:border-amber-500 dark:border-zinc-700">
-            {image ? <span className="text-zinc-800 dark:text-zinc-200">📎 {image.name} <button className="ml-2 text-red-500"
-              onClick={e => { e.stopPropagation(); setImage(null); }}>remove</button></span>
-              : "Drop a screenshot here, or click to choose (max 500 KB for image search)"}
-            <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" hidden
-              onChange={e => setImage(e.target.files?.[0] ?? null)} />
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {EXAMPLES.map(x => (
-              <button key={x.file} onClick={() => loadExample(x.file)}
-                className="rounded-full border border-zinc-300 px-3 py-1 text-xs hover:border-amber-500 dark:border-zinc-700">{x.label}</button>
-            ))}
-          </div>
-          <button onClick={check} disabled={running || (!text.trim() && !image)}
-            className="w-full rounded-lg bg-amber-500 py-2.5 font-semibold text-zinc-950 hover:bg-amber-400 disabled:opacity-40">
-            {running ? "Investigating…" : "Check it"}
-          </button>
-          {error && <p className="rounded bg-red-100 p-2 text-sm text-red-800 dark:bg-red-950 dark:text-red-200">{error}</p>}
-        </section>
-
-        {/* 2. Timeline */}
-        <section className="space-y-2">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Investigation</h2>
-          {!items.length && <p className="text-sm text-zinc-500">Each live search shows up here with its exact query and sources.</p>}
-          {items.map((it, n) => it.kind === "followup"
-            ? <div key={n} className="ml-6 text-xs font-medium text-amber-600">↳ Follow-up: {it.reason}</div>
-            : <ProbeCard key={it.id} card={cards[it.id]} flash={flash === it.id} />)}
-        </section>
-
-        {/* 3. Verdict */}
-        <section className="space-y-4">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Verdict</h2>
-          {result ? <Gauge score={result.score} band={result.band} />
-            : <p className="text-sm text-zinc-500">{running ? "Collecting evidence…" : "The score is computed from fixed rules, never by the AI."}</p>}
-          {signals.length > 0 && (
-            <ul className="space-y-1.5 text-sm">
-              {signals.map(s => (
-                <li key={s.code} className="flex gap-2">
-                  <span className={`w-10 shrink-0 text-right font-mono font-bold ${s.weight > 0 ? "text-red-600" : "text-green-600"}`}>
-                    {s.weight > 0 ? "+" : ""}{s.weight}</span>
-                  <span><b className="capitalize">{s.code.toLowerCase().replaceAll("_", " ")}</b>
-                    <span className="text-zinc-500"> · {s.detail}</span><Cite ids={s.evidence_ids} /></span>
-                </li>
-              ))}
-            </ul>
-          )}
-          {narrative && (
-            <>
-              <p className="text-sm leading-relaxed">{narrative.text.split(/(\[E\d+\])/).map((part, i) => {
-                const m = part.match(/^\[(E\d+)\]$/);
-                return m ? <Cite key={i} ids={[m[1]]} /> : <span key={i}>{part}</span>;
-              })}</p>
-              <div className="rounded-lg border border-zinc-300 bg-white p-3 text-sm whitespace-pre-line dark:border-zinc-700 dark:bg-zinc-900">
-                {narrative.warning}
+    <MotionConfig reducedMotion="user">
+      <div className="min-h-screen bg-canvas px-2 py-2 text-ink sm:px-4 sm:py-4">
+        <div className="mx-auto max-w-[1440px] space-y-3">
+          {/* header */}
+          <motion.header className="rounded-[20px] bg-white px-4 pb-8 sm:px-6"
+            initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.7, ease: EASE }}>
+            <nav className="flex items-center justify-between py-5">
+              <Link href="/" className="flex items-center gap-2 text-[15px] font-bold tracking-tight"><Mark /> Jhol</Link>
+              <div className="flex items-center gap-5 text-[13px] font-medium">
+                <Link href="/" className="hidden text-ink/70 transition hover:text-ember sm:block">Home</Link>
+                <span className="flex items-center gap-2 rounded-full border border-ink/10 px-3 py-1.5 font-mono text-[11px]">
+                  <span className={`h-1.5 w-1.5 rounded-full ${credits ? "bg-green-500" : "bg-ink-3"}`} />
+                  {credits === undefined ? "…" : credits === null ? "replay mode" : `${credits} SerpApi credits`}
+                </span>
               </div>
-              <button onClick={() => { navigator.clipboard.writeText(narrative.warning); setCopied(true); setTimeout(() => setCopied(false), 1500); }}
-                className="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-500">
-                {copied ? "Copied ✓" : "Copy warning for family group"}
+            </nav>
+            <div className="flex flex-wrap items-end justify-between gap-4 px-0 pt-4 sm:px-2">
+              <div>
+                <p className="eyebrow text-ink-2">Check a message</p>
+                <h1 className="mt-3 text-[clamp(1.7rem,3.4vw,2.6rem)] font-semibold leading-[1.08] tracking-[-0.035em]">
+                  Kuch toh <span className="text-ember">jhol</span> hai? Let&apos;s find out.
+                </h1>
+              </div>
+              <p className="max-w-sm text-[13.5px] leading-relaxed text-ink-2">
+                Live SerpApi searches on every link, phone, app and claim. The score comes from fixed rules, never the AI.
+              </p>
+            </div>
+          </motion.header>
+
+          <main className="grid gap-3 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.25fr)_minmax(0,1fr)]">
+            {/* 01 · message */}
+            <Panel delay={0.1} className="bg-white lg:sticky lg:top-3 lg:self-start">
+              <Head n="01" title="Message" />
+              <textarea value={text} onChange={e => { setText(e.target.value); setSample(""); }} rows={9}
+                placeholder="Paste the message you received…"
+                className="mt-4 w-full resize-none rounded-xl border border-transparent bg-[#f4f4f5] p-3.5 text-[14px] leading-relaxed outline-none transition placeholder:text-ink-3 focus:border-ember/40 focus:bg-white focus:ring-4 focus:ring-ember/10" />
+
+              <div onClick={() => fileRef.current?.click()}
+                onDragOver={e => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)}
+                onDrop={e => { e.preventDefault(); setDrag(false); pickFile(e.dataTransfer.files[0]); }}
+                className={`mt-2.5 flex cursor-pointer items-center gap-3 rounded-xl border border-dashed p-3 text-[13px] transition ${drag ? "border-ember bg-ember/5" : "border-ink/15 hover:border-ember/60"}`}>
+                {preview
+                  // eslint-disable-next-line @next/next/no-img-element
+                  ? <img src={preview} alt="" className="h-12 w-10 rounded-md object-cover object-top ring-1 ring-ink/10" />
+                  : <span className="grid h-12 w-10 place-items-center rounded-md bg-[#f4f4f5] text-lg text-ink-3">＋</span>}
+                <span className="min-w-0 flex-1">
+                  {image ? <><b className="block truncate font-semibold">{image.name}</b>
+                    <span className="text-ink-3">Gemini reads it · Lens reverse-searches it</span></>
+                    : <><b className="block font-semibold">Drop a screenshot</b><span className="text-ink-3">or click to choose · max 500 KB</span></>}
+                </span>
+                {image && <button className="text-[12px] font-semibold text-ink-3 hover:text-ember"
+                  onClick={e => { e.stopPropagation(); setImage(null); setSample(""); }}>Remove</button>}
+                <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={e => pickFile(e.target.files?.[0])} />
+              </div>
+
+              <p className="mt-5 text-[13px] font-semibold">Or pick a sample <span className="font-normal text-ink-3">· replayable, 0 credits</span></p>
+              <div className="mt-2.5 grid grid-cols-2 gap-1.5">
+                {EXAMPLES.map(x => (
+                  <button key={x.file} onClick={() => loadExample(x.file)}
+                    className={`rounded-md px-2 py-2 text-[12px] font-medium transition ${sample === x.file ? "bg-ink text-white" : "bg-[#efefef] hover:bg-[#e4e4e4]"}`}>
+                    {x.label}
+                  </button>
+                ))}
+              </div>
+
+              <button onClick={check} disabled={running || (!text.trim() && !image)}
+                className="btn-ember relative mt-6 w-full overflow-hidden rounded-lg py-3 text-[14px] font-semibold disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none">
+                {running && <motion.span className="absolute inset-y-0 left-0 bg-white/20"
+                  initial={{ width: "0%" }} animate={{ width: probes.length ? `${(done / probes.length) * 100}%` : "8%" }} transition={{ duration: 0.4 }} />}
+                <span className="relative">{running ? `Investigating… ${elapsed.toFixed(1)}s` : "Check it"}</span>
               </button>
-              <p className="text-xs text-zinc-500">Jhol reports risk indicators found in public search results. It doesn&apos;t accuse anyone of fraud.</p>
-            </>
-          )}
-        </section>
-      </main>
+              <p className="mt-2.5 text-center text-[11.5px] text-ink-3">Up to 9 live searches per check. Samples replay from cache.</p>
+              <AnimatePresence>
+                {error && <motion.p initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+                  className="mt-3 rounded-lg bg-red-50 p-3 text-[13px] text-red-800">{error}</motion.p>}
+              </AnimatePresence>
+            </Panel>
+
+            {/* 02 · live investigation */}
+            <Panel id="timeline" delay={0.18} className="relative min-h-[560px] overflow-hidden bg-ink text-white">
+              <div className="flex items-center justify-between">
+                <Head n="02" title="Live investigation" dark />
+                {started && <span className="font-mono text-[11px] text-white/50">{done}/{probes.length} searches · {elapsed.toFixed(1)}s</span>}
+              </div>
+              {!started ? <IdleTimeline /> : (
+                <ol className="relative mt-6">
+                  <span className="absolute bottom-3 left-[11px] top-3 w-px bg-white/10" />
+                  <AnimatePresence initial={false}>
+                    {items.map((it, n) => it.kind === "followup"
+                      ? <motion.li key={`f${n}`} className="relative ml-8 py-2 pl-5 text-[12.5px] font-medium text-ember"
+                          initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.4, ease: EASE }}>
+                          <span className="absolute left-0 top-0 h-[18px] w-3.5 rounded-bl-lg border-b border-l border-ember/60" />
+                          Follow-up · {it.reason}
+                        </motion.li>
+                      : <ProbeRow key={it.id} card={cards[it.id]} flash={flash === it.id} />)}
+                  </AnimatePresence>
+                </ol>
+              )}
+            </Panel>
+
+            {/* 03 · verdict */}
+            <Panel delay={0.26} className="bg-white lg:sticky lg:top-3 lg:self-start">
+              <Head n="03" title="Verdict" />
+              <div className="mt-5 flex items-center gap-4">
+                <Gauge score={result?.score ?? 0} band={result?.band} />
+                <div>
+                  <AnimatePresence mode="wait">
+                    <motion.p key={result?.band ?? (running ? "run" : "idle")} className="text-[22px] font-bold tracking-[-0.02em]"
+                      style={{ color: result ? BAND[result.band].color : "#94959a" }}
+                      initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
+                      {result ? BAND[result.band].label : running ? "Collecting evidence…" : "Waiting"}
+                    </motion.p>
+                  </AnimatePresence>
+                  <p className="mt-0.5 text-[12.5px] leading-snug text-ink-3">
+                    {result ? BAND[result.band].note : "Risk score out of 100, from fixed weighted rules."}
+                  </p>
+                </div>
+              </div>
+
+              {signals.length > 0 && (
+                <ul className="mt-6 border-t border-ink/10">
+                  {signals.map((s, i) => (
+                    <motion.li key={s.code} className="grid grid-cols-[44px_1fr] gap-x-2 border-b border-ink/10 py-3 text-[13px]"
+                      initial={{ opacity: 0, x: 12 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.08, duration: 0.4, ease: EASE }}>
+                      <span className={`font-mono text-[13px] font-bold ${s.weight > 0 ? "text-ember" : "text-green-600"}`}>
+                        {s.weight > 0 ? "+" : "−"}{Math.abs(s.weight)}</span>
+                      <span>
+                        <b className="font-semibold capitalize">{s.code.toLowerCase().replaceAll("_", " ")}</b>
+                        <Cite ids={s.evidence_ids} />
+                        <span className="mt-0.5 block text-ink-2">{s.detail}</span>
+                      </span>
+                    </motion.li>
+                  ))}
+                </ul>
+              )}
+
+              <AnimatePresence>
+                {narrative && (
+                  <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, ease: EASE }}>
+                    <p className="mt-5 text-[13.5px] leading-relaxed text-ink/85">{narrative.text.split(/(\[E\d+\])/).map((part, i) => {
+                      const m = part.match(/^\[(E\d+)\]$/);
+                      return m ? <Cite key={i} ids={[m[1]]} /> : <span key={i}>{part}</span>;
+                    })}</p>
+                    <div className="mt-5 rounded-xl bg-[#efe7de] p-3">
+                      <p className="eyebrow mb-2 text-ink/50">For the family group</p>
+                      <div className="whitespace-pre-line rounded-lg rounded-tl-none bg-white p-3 text-[13px] leading-relaxed shadow-sm">{narrative.warning}</div>
+                    </div>
+                    <button onClick={() => { navigator.clipboard.writeText(narrative.warning); setCopied(true); setTimeout(() => setCopied(false), 1600); }}
+                      className="btn-ember mt-3 w-full rounded-lg py-2.5 text-[13px] font-semibold">
+                      {copied ? "Copied ✓" : "Copy warning for family group"}
+                    </button>
+                    <p className="mt-3 text-[11.5px] leading-snug text-ink-3">
+                      Jhol reports risk indicators found in public search results. It doesn&apos;t accuse anyone of fraud.
+                    </p>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </Panel>
+          </main>
+        </div>
+      </div>
+    </MotionConfig>
+  );
+}
+
+function Panel({ children, className = "", delay = 0, id }: { children: React.ReactNode; className?: string; delay?: number; id?: string }) {
+  return (
+    <motion.section id={id} className={`scroll-mt-3 rounded-[20px] p-5 sm:p-6 ${className}`}
+      initial={{ opacity: 0, y: 28 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.8, delay, ease: EASE }}>
+      {children}
+    </motion.section>
+  );
+}
+
+function Head({ n, title, dark }: { n: string; title: string; dark?: boolean }) {
+  return (
+    <p className="flex items-baseline gap-2.5">
+      <span className="font-mono text-[13px] text-ember">{n}</span>
+      <span className={`eyebrow ${dark ? "text-white/60" : "text-ink-2"}`}>{title}</span>
+    </p>
+  );
+}
+
+function IdleTimeline() {
+  const p = useMotionValue(0.35);
+  const [plate, setPlate] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setPlate(x => (x + 1) % 3), 1800);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <div className="flex h-[480px] flex-col items-center justify-center text-center">
+      <motion.div className="h-[320px] w-[320px]" animate={{ y: [0, -8, 0] }} transition={{ duration: 6, repeat: Infinity, ease: "easeInOut" }}>
+        <Isometric progress={p} active={plate} />
+      </motion.div>
+      <p className="mt-2 max-w-xs text-[13.5px] leading-relaxed text-white/55">
+        Each live search shows up here with its engine, exact query and sources.
+      </p>
     </div>
   );
 }
 
-function ProbeCard({ card, flash }: { card?: Card; flash: boolean }) {
+function ProbeRow({ card, flash }: { card?: Card; flash: boolean }) {
   if (!card) return null;
   const ev = card.ev;
   const bad = Boolean(ev?.facts.inconclusive);
   return (
-    <div id={`card-${card.id}`}
-      className={`rounded-lg border p-3 text-sm ${card.followup ? "ml-6" : ""} ${flash ? "flash" : ""} ${bad
-        ? "border-zinc-200 bg-zinc-100 text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/50"
-        : "border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900"}`}>
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="font-mono text-xs text-zinc-400">{card.id}</span>
-        <span className="font-medium">{PROBE_NAMES[card.probe] ?? card.probe}</span>
-        <span className="rounded bg-sky-100 px-1.5 font-mono text-[11px] text-sky-800 dark:bg-sky-950 dark:text-sky-300">{card.engine}</span>
-        <span className="ml-auto text-xs">
-          {!ev ? <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-amber-500 border-t-transparent" />
-            : <>{bad ? "⚠ inconclusive" : "✓"} <span className="text-zinc-400">{ev.latency_ms} ms</span>
-              <span className={`ml-1.5 rounded px-1 font-mono text-[10px] ${ev.source === "live" ? "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300"
-                : "bg-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"}`}>{ev.source}</span></>}
-        </span>
+    <motion.li id={`card-${card.id}`} layout
+      initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.45, ease: EASE }}
+      className={`relative grid grid-cols-[24px_1fr] gap-3 py-3 ${card.followup ? "ml-8" : ""}`}>
+      <span className="relative z-10 mt-0.5 grid h-6 w-6 place-items-center rounded-full bg-ink">
+        {!ev ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-ember border-t-transparent" />
+          : bad ? <span className="h-2.5 w-2.5 rounded-full border border-white/30" />
+            : <motion.span initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: "spring", stiffness: 400, damping: 18 }}
+              className="grid h-4 w-4 place-items-center rounded-full bg-ember text-[9px] font-bold text-white">✓</motion.span>}
+      </span>
+      <div className={`min-w-0 rounded-xl border p-3.5 transition-shadow ${flash ? "flash" : ""} ${bad
+        ? "border-white/5 bg-white/[0.02] text-white/45" : "border-white/10 bg-white/[0.04]"}`}>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="font-mono text-[11px] font-semibold text-ember">{card.id}</span>
+          <span className="text-[13.5px] font-medium">{PROBE_NAMES[card.probe] ?? card.probe}</span>
+          <span className="rounded bg-white/10 px-1.5 py-px font-mono text-[10.5px] text-white/70">{card.engine}</span>
+          {ev && (
+            <span className="ml-auto flex items-center gap-1.5 font-mono text-[10.5px] text-white/45">
+              {bad ? "inconclusive" : `${ev.latency_ms} ms`}
+              <span className={`rounded px-1.5 py-px ${ev.source === "live" ? "bg-green-500/15 text-green-300" : "bg-white/10 text-white/60"}`}>{ev.source}</span>
+            </span>
+          )}
+        </div>
+        <code className="mt-1.5 block break-all font-mono text-[11.5px] text-white/45">{card.query}</code>
+        {bad && <p className="mt-1.5 text-[12px]">{String(ev?.facts.error ?? "")} · adds no risk</p>}
+        {ev && !bad && (
+          <div className="mt-2 space-y-1">
+            {ev.links.slice(0, 2).map((l, i) => (
+              <a key={i} href={l.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-[12.5px] text-white/80 hover:text-white">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={`https://www.google.com/s2/favicons?domain=${host(l.url)}&sz=32`} alt="" className="h-3.5 w-3.5 rounded-sm" />
+                <span className="min-w-0 flex-1 truncate">{l.title || host(l.url)}</span>
+                {l.label === "complaint" && <span className="rounded bg-ember/20 px-1.5 text-[10px] font-semibold text-ember">complaint</span>}
+              </a>
+            ))}
+            {!ev.links.length && <p className="text-[12px] text-white/45">No results: that&apos;s evidence too.</p>}
+          </div>
+        )}
       </div>
-      <code className="mt-1 block break-all text-xs text-zinc-500">{card.query}</code>
-      {bad && <p className="mt-1 text-xs">{String(ev?.facts.error ?? "")} (adds no risk)</p>}
-      {ev && !bad && ev.links.slice(0, 2).map((l, i) => (
-        <a key={i} href={l.url} target="_blank" rel="noreferrer" className="mt-1.5 flex items-start gap-2 hover:underline">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={`https://www.google.com/s2/favicons?domain=${host(l.url)}&sz=32`} alt="" className="mt-0.5 h-4 w-4" />
-          <span className="min-w-0 flex-1 truncate">{l.title || host(l.url)}</span>
-          {l.label === "complaint" && <span className="rounded bg-red-100 px-1 text-[10px] text-red-700 dark:bg-red-950 dark:text-red-300">complaint</span>}
-        </a>
-      ))}
-      {ev && !bad && !ev.links.length && <p className="mt-1 text-xs text-zinc-500">No results.</p>}
-    </div>
+    </motion.li>
   );
 }
 
-function Gauge({ score, band }: { score: number; band: Band }) {
-  const { label, color } = BAND[band];
-  const a = Math.PI * (1 - score / 100);
+function Gauge({ score, band }: { score: number; band?: Band }) {
+  const [v, setV] = useState(0);
+  useEffect(() => {
+    const c = animate(v, score, { duration: 1.4, ease: EASE, onUpdate: x => setV(Math.round(x)) });
+    return () => c.stop();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- animate from the current value
+  }, [score]);
+  const a = Math.PI * (1 - v / 100);
+  const color = band ? BAND[band].color : "#cbbebb";
   return (
-    <div className="flex items-center gap-4">
-      <svg viewBox="0 0 120 70" className="w-40">
-        <path d="M10 60 A50 50 0 0 1 110 60" fill="none" stroke="currentColor" strokeOpacity=".12" strokeWidth="10" strokeLinecap="round" />
-        {score > 0 && <path d={`M10 60 A50 50 0 0 1 ${60 + 50 * Math.cos(a)} ${60 - 50 * Math.sin(a)}`}
-          fill="none" stroke={color} strokeWidth="10" strokeLinecap="round" />}
-        <text x="60" y="58" textAnchor="middle" fontSize="24" fontWeight="800" fill="currentColor">{score}</text>
-      </svg>
-      <div>
-        <div className="text-2xl font-black" style={{ color }}>{label}</div>
-        <div className="text-xs text-zinc-500">risk score out of 100</div>
-      </div>
-    </div>
+    <svg viewBox="0 0 120 70" className="w-36 shrink-0">
+      <path d="M10 60 A50 50 0 0 1 110 60" fill="none" stroke="#0a0b0b" strokeOpacity=".08" strokeWidth="9" strokeLinecap="round" />
+      {v > 0 && <path d={`M10 60 A50 50 0 0 1 ${60 + 50 * Math.cos(a)} ${60 - 50 * Math.sin(a)}`} fill="none"
+        stroke={color} strokeWidth="9" strokeLinecap="round" />}
+      <text x="60" y="58" textAnchor="middle" fontSize="24" fontWeight="800" fill="#0a0b0b">{band ? v : "–"}</text>
+    </svg>
   );
 }

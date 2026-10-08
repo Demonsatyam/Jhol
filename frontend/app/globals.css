@@ -18,7 +18,7 @@ body { font-family: var(--font-sans); }
 
 @keyframes flash {
   0%, 100% { box-shadow: 0 0 0 0 transparent; }
-  30% { box-shadow: 0 0 0 3px rgb(245 158 11); }
+  30% { box-shadow: 0 0 0 3px rgb(255 79 18); }
 }
 .flash { animation: flash 1.6s ease-out; }
 
