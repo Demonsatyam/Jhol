@@ -11,6 +11,107 @@ The LLM never sets the score. It only extracts entities, labels snippets and wri
 
 Built for the SerpApi India Hackathon 2026.
 
+![Jhol landing page](docs/screenshots/landing-hero.png)
+
+## Project brief
+
+| | |
+|---|---|
+| **Who it's for** | Indian families who receive forwarded job offers, stock tips, KYC alerts and loan-app links on WhatsApp/SMS, and the one relative everyone asks "is this real?" |
+| **What you give it** | Pasted message text, or a screenshot (Gemini reads the text out of the image). |
+| **What it does** | Pulls out brands, links, phones, UPI IDs, apps, regulator claims and addresses. It then runs up to 9 live searches across **5 SerpApi engines**: Google, Google News, Google Lens, Google Play and Google Maps. When a link isn't the brand's real domain, it makes a **follow-up hop** to search complaints about that look-alike. |
+| **What you get** | A **0–100 risk score** from 11 fixed, weighted rules; each signal cites the search behind it (`[E1]`, `[E2]` …); a plain-English explanation; and a **Hindi + English warning** ready to paste into the family group. |
+| **Why trust it** | The score is deterministic and auditable. The AI only extracts entities, labels snippets and writes the explanation. Invented citations are stripped. A failed search is marked *inconclusive* and never adds risk. |
+| **Cost to run** | ₹0. Built on the SerpApi free plan (250 searches/month) with a Postgres cache, replay fixtures, and async search + free archive polling, so no credit is wasted on timeouts. |
+| **Try it without keys** | `REPLAY=1` serves all four samples from saved fixtures, with no network calls and no API keys. |
+
+**Results on the bundled samples** (all replayable):
+
+| Sample | Score | Verdict | Signals that fired |
+|---|---|---|---|
+| "Amazon HR" task-scam job offer | **75** | Likely scam | Impersonation +30, Zero footprint +15, Pattern in news +15, App red flags +15 |
+| "SEBI registered" stock tip | **75** | Likely scam | Regulator claim unverified +20, Zero footprint +15, Pattern in news +15, App red flags +15, Ghost office +10 |
+| SBI KYC scam (screenshot) | **75** | Likely scam | Impersonation +30, Zero footprint +15, Pattern in news +15, App red flags +15 |
+| Real SBI debit SMS (control) | **0** | Low risk | Official domain match −20, Pattern in news +15 |
+
+## Screenshots
+
+### The portal
+
+| Landing: hero | Landing: probe stack |
+|---|---|
+| ![Hero](docs/screenshots/landing-hero.png) | ![Probe stack](docs/screenshots/landing-probes.png) |
+| **Landing: evidence** | **Landing: scroll-driven investigation workflow** |
+| ![Evidence](docs/screenshots/landing-evidence.png) | ![Workflow](docs/screenshots/landing-workflow.png) |
+
+![Try it](docs/screenshots/landing-try.png)
+
+### Outputs: the checker (`/check`)
+
+Each check fills three panels: **01 Message**, **02 Live investigation** (every SerpApi search with its engine,
+exact query, source badge and top results) and **03 Verdict** (score, signals with citations, explanation and the
+family-group warning).
+
+**Task-scam job offer: 75, likely scam.** The official-site search finds `amazon.in`, so Jhol makes the follow-up
+hop to check the look-alike domain.
+
+![Task scam result](docs/screenshots/check-task-scam.png)
+
+**"SEBI registered" stock tip: 75, likely scam.** No SEBI/RBI page names the company, the app isn't on Play, and
+there's no business at the claimed Dalal Street office.
+
+![SEBI tip result](docs/screenshots/check-sebi-tip.png)
+
+**KYC scam screenshot: 75, likely scam.** Gemini reads the image, Lens reverse-searches it, and the look-alike
+`sbi-yono-kyc.in` is flagged against `sbi.bank.in`.
+
+![KYC screenshot result](docs/screenshots/check-kyc-screenshot.png)
+
+**Real SBI debit SMS (control): 0, low risk.** The only link is SBI's official domain, which outweighs the
+general news about fake debit alerts.
+
+![Bank SMS result](docs/screenshots/check-bank-sms.png)
+
+<details>
+<summary><b>Mobile view</b></summary>
+
+<img src="docs/screenshots/check-mobile.png" alt="Mobile result" width="390" />
+
+</details>
+
+### Outputs: terminal
+
+The same pipeline runs from the CLI. This is real output with `REPLAY=1`, so no keys or network are used:
+
+```text
+$ REPLAY=1 python manage.py investigate ../examples/task_scam.txt
+  ✓ E1 official_domain  replay  {"brand": "Amazon", "official_domain": "amazon.in"}
+{"type": "followup", "reason": "amazon-taskjobs-in.top is not Amazon's official domain (amazon.in): checking impersonation"}
+  ✓ E4 play_app         replay  {"app": "TaskEarn Pro", "found": false}
+  ✓ E3 news_pattern     replay  {"pattern": "task-based part-time job", "articles": 37}
+  ✓ E2 domain_footprint replay  {"domain": "amazon-taskjobs-in.top", "indexed": 0}
+  ✓ E5 complaints       replay  {"target": "amazon-taskjobs-in.top"}
+    E5 [complaint] Report a Scam - Amazon Customer Service
+    E5 [complaint] Fraud Alert
+    …
+{"type": "signal", "code": "IMPERSONATION", "weight": 30, "evidence_ids": ["E1"], "detail": "amazon-taskjobs-in.top is not Amazon's official site (amazon.in)"}
+{"type": "signal", "code": "ZERO_FOOTPRINT", "weight": 15, "evidence_ids": ["E2"], "detail": "amazon-taskjobs-in.top has no pages indexed by Google"}
+{"type": "signal", "code": "PATTERN_IN_NEWS", "weight": 15, "evidence_ids": ["E3"], "detail": "37 news reports on 'task-based part-time job' scams"}
+{"type": "signal", "code": "APP_RED_FLAGS", "weight": 15, "evidence_ids": ["E4"], "detail": "App 'TaskEarn Pro': not found on Google Play"}
+{"type": "score", "score": 75, "band": "likely_scam"}
+{"type": "narrative", "text": "The website you are visiting is not the official Amazon site [E1]. This domain has no presence on Google, …"}
+```
+
+This run also shows the guardrail in action. The LLM labelled 8 results under E5 as "complaints", but they're
+generic Amazon scam pages that never name `amazon-taskjobs-in.top`. The deterministic `mentions()` check rejects
+them, so `COMPLAINTS_FOUND` (+25) doesn't fire.
+
+The streaming API returns the same events as NDJSON:
+
+```bash
+curl -N -F text=@examples/task_scam.txt localhost:8000/api/investigate
+```
+
 ## The problem
 
 Indians lost thousands of crores to online fraud last year, mostly through messages that *look* legitimate: an
@@ -133,7 +234,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ```bash
 cd frontend
 echo "NEXT_PUBLIC_API_URL=http://localhost:8000" > .env.local
-npm install && npm run dev      # http://localhost:3000
+npm install && npm run dev      # landing: http://localhost:3000  ·  checker: http://localhost:3000/check
 ```
 
 **Judges without a SerpApi key:** set `REPLAY=1` in `.env`. Every SerpApi response and LLM answer for the four
