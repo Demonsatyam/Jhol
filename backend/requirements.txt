@@ -1,0 +1,8 @@
+Django>=5.2,<6
+psycopg[binary]
+dj-database-url
+python-dotenv
+httpx
+django-cors-headers
+google-genai
+groq
