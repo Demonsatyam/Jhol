@@ -296,9 +296,9 @@ export default function Check() {
               <AnimatePresence>
                 {narrative && (
                   <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, ease: EASE }}>
-                    <p className="mt-5 text-[13.5px] leading-relaxed text-ink/85">{narrative.text.split(/(\[E\d+\])/).map((part, i) => {
-                      const m = part.match(/^\[(E\d+)\]$/);
-                      return m ? <Cite key={i} ids={[m[1]]} /> : <span key={i}>{part}</span>;
+                    <p className="mt-5 text-[13.5px] leading-relaxed text-ink/85">{narrative.text.split(/(\[E\d+(?:\s*,\s*E\d+)*\])/).map((part, i) => {
+                      const ids = /^\[E\d/.test(part) ? part.match(/E\d+/g) : null;
+                      return ids ? <Cite key={i} ids={ids} /> : <span key={i}>{part}</span>;
                     })}</p>
                     <div className="mt-5 rounded-xl bg-[#efe7de] p-3">
                       <p className="eyebrow mb-2 text-ink/50">For the family group</p>
