@@ -17,6 +17,7 @@ const EXAMPLES = [
   { label: "Task-scam job offer", file: "task_scam.txt" },
   { label: "“SEBI registered” stock tip", file: "sebi_tip.txt" },
   { label: "Real bank SMS (control)", file: "bank_sms.txt" },
+  { label: "KYC scam screenshot", file: "kyc_screenshot.png" },
 ];
 const PROBE_NAMES: Record<string, string> = {
   official_domain: "Find the brand's official website",
@@ -57,8 +58,14 @@ export default function Home() {
   }, []);
 
   async function loadExample(file: string) {
-    setText(await (await fetch(`/examples/${file}`)).text());
-    setImage(null);
+    const res = await fetch(`/examples/${file}`);
+    if (file.endsWith(".png")) {
+      setText("");
+      setImage(new File([await res.blob()], file, { type: "image/png" }));
+    } else {
+      setText(await res.text());
+      setImage(null);
+    }
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- NDJSON events, shape checked by `type`
