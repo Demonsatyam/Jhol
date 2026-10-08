@@ -56,13 +56,14 @@ def credits_left(fresh=False):
     return _credits[1]
 
 
-def serp(engine, **params):
-    """Returns (data, source) where source is live | cache | replay."""
+def serp(engine, _upload=None, **params):
+    """Returns (data, source) where source is live | cache | replay.
+    _upload=(bytes, mime) uploads an image for google_lens; cached by the image's sha256."""
     if engine in GL_HL:
         params = {"gl": "in", "hl": "en", **params}
     elif engine == "google_lens":
         params = {"hl": "en", "country": "in", **params}
-    key = cache_key(engine, params)
+    key = cache_key(engine, {**params, "image_sha256": hashlib.sha256(_upload[0]).hexdigest()} if _upload else params)
 
     if os.environ.get("REPLAY") == "1":
         f = FIXTURES / f"{key}.json"
@@ -70,9 +71,12 @@ def serp(engine, **params):
             raise ReplayMiss(f"no fixture for {engine} {params}")
         return json.loads(f.read_text()), "replay"
 
+    api_key = os.environ.get("SERPAPI_KEY", "")
     hit = SerpCache.objects.filter(key=key).first()
-    if hit:
+    if hit and "_pending_sid" not in hit.response:
         return hit.response, "cache"
+    if hit:  # an earlier search stalled at SerpApi: pick it up from the free archive instead of paying again
+        return _finish(key, engine, params, hit.response["_pending_sid"], {}, api_key, "cache")
 
     left = credits_left()
     if left is not None and left < 40 and os.environ.get("ALLOW_LIVE") != "1":
@@ -80,7 +84,14 @@ def serp(engine, **params):
 
     # Async submit + poll the (free) archive: a blocking GET that times out still costs a credit,
     # and SerpApi sometimes takes 60-90s per search.
-    api_key = os.environ["SERPAPI_KEY"]
+    if _upload:
+        if len(_upload[0]) > 500_000:
+            raise ValueError("screenshot is over SerpApi's 500 KB upload limit; Lens skipped")
+        up = httpx.post("https://serpapi.com/image", params={"api_key": api_key},
+                        files={"image": ("upload", _upload[0], _upload[1] or "image/png")}, timeout=30).json()
+        if not up.get("image_id"):
+            raise RuntimeError(f"image upload failed: {scrub(up)}")
+        params = {**params, "image_id": up["image_id"]}  # expires in 10 min, so never part of the cache key
     data = httpx.get("https://serpapi.com/search.json",
                      params={"engine": engine, **params, "async": "true", "api_key": api_key}, timeout=30).json()
     global live_calls, _credits
@@ -89,17 +100,26 @@ def serp(engine, **params):
         n = live_calls
         _credits = (0.0, _credits[1])  # force refresh next time
     print(f"[serp] LIVE {engine} {params}. live calls this process: {n}", flush=True)
-    sid = data.get("search_metadata", {}).get("id")
-    deadline = time.time() + 150
-    while sid and data["search_metadata"].get("status") in ("Processing", "Queued") and time.time() < deadline:
-        time.sleep(2)
+    return _finish(key, engine, params, data.get("search_metadata", {}).get("id"), data, api_key, "live")
+
+
+def _finish(key, engine, params, sid, data, api_key, source):
+    status = lambda: data.get("search_metadata", {}).get("status")  # noqa: E731
+    deadline = time.time() + 90
+    while sid and status() in (None, "Processing", "Queued") and time.time() < deadline:
+        time.sleep(2 if data else 0)
         data = httpx.get(f"https://serpapi.com/searches/{sid}.json", params={"api_key": api_key}, timeout=20).json()
     data = scrub(data)
+    if sid and status() in ("Processing", "Queued"):
+        SerpCache.objects.update_or_create(key=key, defaults={"engine": engine, "params": params,
+                                                              "response": {"_pending_sid": sid}})
+        raise TimeoutError("SerpApi still processing; will resume from archive next time")
     # "no results" comes back as status=Success with an error string: that's real evidence, keep it
-    if data.get("search_metadata", {}).get("status") != "Success":
-        raise RuntimeError(data.get("error", f"HTTP {r.status_code}"))
+    if status() != "Success":
+        SerpCache.objects.filter(key=key).delete()
+        raise RuntimeError(data.get("error") or f"SerpApi status {status()}")
 
     SerpCache.objects.update_or_create(key=key, defaults={"engine": engine, "params": params, "response": data})
     FIXTURES.mkdir(exist_ok=True)
     (FIXTURES / f"{key}.json").write_text(json.dumps(data, ensure_ascii=False))
-    return data, "live"
+    return data, source
